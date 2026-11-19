@@ -9,7 +9,14 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -63,6 +70,11 @@ class Conversation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+    # NULL until the first message lands, so empty threads sort after active
+    # ones. CHAT-4 bumps it inside the same transaction as the insert.
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True, index=True
+    )
 
     members: Mapped[list[ConversationMember]] = relationship(
         back_populates="conversation",
@@ -79,6 +91,13 @@ class Conversation(Base):
 
 class ConversationMember(Base):
     __tablename__ = "conversation_members"
+    # The composite primary key already forbids a duplicate pair; the named
+    # constraint states the rule the API (and CHAT-3's schema check) rely on.
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "user_id", name="uq_conversation_members_pair"
+        ),
+    )
 
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
@@ -89,6 +108,8 @@ class ConversationMember(Base):
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+    # Highest message seq this member has read; 0 means "nothing read yet".
+    last_read_seq: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="members")
     user: Mapped[User] = relationship(lazy="joined")
