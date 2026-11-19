@@ -71,3 +71,34 @@ def access_token(register: Callable[..., Response]) -> str:
 @pytest.fixture
 def auth_headers(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
+
+
+@pytest.fixture
+def account(register: Callable[..., Response]) -> Callable[..., dict]:
+    """Register a user and return id/email plus ready-to-use auth headers."""
+
+    def _account(email: str = "omar@example.com", display_name: str = "Omar") -> dict:
+        response = register(email, display_name=display_name)
+        assert response.status_code == 201, response.text
+        body = response.json()
+        return {
+            "id": body["user"]["id"],
+            "email": body["user"]["email"],
+            "display_name": body["user"]["display_name"],
+            "token": body["access_token"],
+            "headers": {"Authorization": f"Bearer {body['access_token']}"},
+        }
+
+    return _account
+
+
+@pytest.fixture
+def me(account: Callable[..., dict]) -> dict:
+    """The default signed-in user (omar@example.com)."""
+    return account()
+
+
+@pytest.fixture
+def other(account: Callable[..., dict]) -> dict:
+    """A second user (maryam@example.com)."""
+    return account("maryam@example.com", "Maryam")
