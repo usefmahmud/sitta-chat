@@ -6,7 +6,7 @@
 **How to read the numbers.** Every figure below is tagged:
 
 - **cited** — taken from the linked source, with the source's own setup described.
-- **measured here** — produced by `bench.py` in the research workspace on this machine (Python 3.14.9 stdlib `sqlite3`, local disk, WAL, median of 21 runs). Reproduce with `python3 bench.py`.
+- **measured here** — produced by `bench.py` in the research workspace on this machine (Python 3.14.9 stdlib `sqlite3`, local disk, WAL, median of 21 runs). Reproduce with `python3 docs/bench-pagination.py` (~30 s, rebuilds the 500k-row table in `bench.db`).
 - **estimate / reasoning** — derived from the cited facts, not observed.
 - `[unverified]` — asserted from general knowledge, no source found in this round.
 
@@ -96,12 +96,16 @@ Setup: 500,000 rows in one `messages` table (450,000 in the test chat), page siz
 
 | Rows skipped | OFFSET (ms) | Keyset (ms) |
 |---|---|---|
-| 0–49 | 0.050 | 0.049 |
-| 1,000–1,049 | 0.090 | 0.054 |
-| 10,000–10,049 | 0.496 | 0.053 |
-| 50,000–50,049 | **2.225** | **0.054** |
+| 0–49 | 0.048 | 0.050 |
+| 1,000–1,049 | 0.092 | 0.055 |
+| 10,000–10,049 | 0.491 | 0.062 |
+| 50,000–50,049 | **2.413** | **0.055** |
 
-Offset grows linearly with depth and is ~41× slower than keyset at offset 50,000; keyset is flat (~0.05 ms) because it touches only the 50 rows it returns — the shape the SQL standard's definition of `OFFSET` predicts.[6][7] Absolute numbers are this machine's; the shape is the point.
+Offset grows linearly with depth and is ~44× slower than keyset at offset 50,000; keyset is flat
+(~0.05 ms) because it touches only the 50 rows it returns — the shape the SQL standard's definition
+of `OFFSET` predicts.[6][7] Absolute numbers are this machine's and move run to run: three runs of
+the same script gave deep-page offset medians of **2.173, 2.225 and 2.413 ms** (41–44× the keyset
+median of 0.053–0.062 ms). The *ratio and the growth curve* are the finding; the microseconds are not.
 
 ### 2.3 Ordering stability when new messages arrive
 
