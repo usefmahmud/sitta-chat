@@ -51,7 +51,54 @@ export interface ApiClientOptions {
   fetchImpl?: typeof fetch;
 }
 
-function resolveBaseUrl(): string {
+export interface PeerSummary {
+  id: string;
+  display_name: string;
+}
+
+export interface Conversation {
+  id: string;
+  type: string;
+  created_at: string;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  peer: PeerSummary;
+}
+
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  seq: number;
+  body: string;
+  client_msg_id: string | null;
+  created_at: string;
+}
+
+export interface MessagePage {
+  items: ChatMessage[];
+  next_before_seq: number | null;
+  has_more: boolean;
+}
+
+/** ws(s)://…/ws for the same host the REST calls go to. */
+export function resolveSocketUrl(
+  token: string,
+  baseUrl: string = resolveBaseUrl(),
+): string {
+  const query = `token=${encodeURIComponent(token)}`;
+  if (/^https?:\/\//i.test(baseUrl)) {
+    const url = new URL(baseUrl);
+    const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${url.host}/ws?${query}`;
+  }
+  const origin = window.location.origin.replace(/^http/i, (scheme) =>
+    scheme.toLowerCase() === 'https' ? 'wss' : 'ws',
+  );
+  return `${origin}/ws?${query}`;
+}
+
+export function resolveBaseUrl(): string {
   const explicit = import.meta.env?.VITE_API_URL;
   const composeDefault = import.meta.env?.VITE_API_BASE_URL;
   return explicit || composeDefault || '/api';
@@ -166,6 +213,39 @@ export class ApiClient {
 
   me(): Promise<AuthUser> {
     return this.request('/auth/me');
+  }
+
+  socketUrl(token: string): string {
+    return resolveSocketUrl(token, this.baseUrl);
+  }
+
+  listConversations(): Promise<Conversation[]> {
+    return this.request('/conversations');
+  }
+
+  listMessages(
+    conversationId: string,
+    options: { beforeSeq?: number | null; afterSeq?: number | null; limit?: number } = {},
+  ): Promise<MessagePage> {
+    const params = new URLSearchParams();
+    if (options.limit !== undefined) params.set('limit', String(options.limit));
+    if (options.beforeSeq != null) params.set('before_seq', String(options.beforeSeq));
+    if (options.afterSeq != null) params.set('after_seq', String(options.afterSeq));
+
+    const query = params.toString();
+    return this.request(
+      `/conversations/${conversationId}/messages${query ? `?${query}` : ''}`,
+    );
+  }
+
+  sendMessage(
+    conversationId: string,
+    input: { body: string; clientMsgId: string },
+  ): Promise<ChatMessage> {
+    return this.request(`/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ body: input.body, client_msg_id: input.clientMsgId }),
+    });
   }
 }
 
