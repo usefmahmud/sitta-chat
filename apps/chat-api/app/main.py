@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .db import init_db
 from .realtime.hub import hub
-from .routers import auth, conversations, health, messages, ws
+from .routers import auth, conversations, health, messages, presence, ws
 
 
 @asynccontextmanager
@@ -41,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api")
     app.include_router(conversations.router, prefix="/api")
     app.include_router(messages.router, prefix="/api")
+    app.include_router(presence.router, prefix="/api")
     # The socket lives at /ws, outside the /api prefix.
     app.include_router(ws.router)
     return app
