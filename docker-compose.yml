@@ -52,7 +52,8 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "${WEB_PORT:-8080}:80"
+      # BIND_HOST (set in .env, never committed) pins the published socket to one interface
+      - "${BIND_HOST:-}:${WEB_PORT:-8080}:80"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
