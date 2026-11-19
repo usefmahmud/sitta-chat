@@ -1,0 +1,71 @@
+# sitta-chat — two containers, one published port.
+#
+#   web (nginx, :80 → host ${WEB_PORT})  ──proxy /api,/ws──▶  api (uvicorn, :8000, internal)
+#                                                              └── sqlite on the chat_data volume
+#
+# Start it only with the owner's approval (see docs/deploy.md).
+
+name: sitta-chat
+
+services:
+  api:
+    build:
+      context: ./apps/chat-api
+      dockerfile: Dockerfile
+    image: sitta-chat-api:local
+    environment:
+      CHAT_ENVIRONMENT: ${CHAT_ENVIRONMENT:-production}
+      # absolute path inside the container — four slashes, the db lives on the volume
+      CHAT_DATABASE_URL: sqlite:////app/data/chat.db
+      CHAT_SECRET_KEY: ${CHAT_SECRET_KEY:?set CHAT_SECRET_KEY in .env (see .env.example)}
+      CHAT_ACCESS_TOKEN_TTL_MINUTES: ${CHAT_ACCESS_TOKEN_TTL_MINUTES:-60}
+      CHAT_CORS_ORIGINS: '${CHAT_CORS_ORIGINS:-["http://localhost:8080"]}'
+    volumes:
+      - chat_data:/app/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    build:
+      context: ./apps/chat-web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    image: sitta-chat-web:local
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  chat_data:
+    name: sitta-chat-data
