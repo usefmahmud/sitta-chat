@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class RegisterRequest(BaseModel):
@@ -57,3 +57,43 @@ class ConversationOut(BaseModel):
     # Filled from the messages table with CHAT-4; always null on this branch.
     last_message_preview: str | None = None
     peer: UserSummary
+
+
+class MessageCreate(BaseModel):
+    """Send a message. ``client_msg_id`` makes a retry idempotent."""
+
+    body: str = Field(min_length=1, max_length=4000)
+    client_msg_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("body")
+    @classmethod
+    def _reject_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("body must contain at least one non-space character")
+        return value
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    conversation_id: str
+    sender_id: str
+    seq: int
+    body: str
+    client_msg_id: str | None = None
+    created_at: datetime
+
+
+class MessagePage(BaseModel):
+    """One page of a thread.
+
+    ``items`` is newest-first unless the request used ``after_seq`` (the
+    reconnect catch-up), in which case it is oldest-first and contiguous.
+    ``next_before_seq`` is the cursor for the next older page, ``null`` when the
+    start of the thread has been reached.
+    """
+
+    items: list[MessageOut]
+    next_before_seq: int | None = None
+    has_more: bool = False

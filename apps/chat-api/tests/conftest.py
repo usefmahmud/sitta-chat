@@ -102,3 +102,15 @@ def me(account: Callable[..., dict]) -> dict:
 def other(account: Callable[..., dict]) -> dict:
     """A second user (maryam@example.com)."""
     return account("maryam@example.com", "Maryam")
+
+
+@pytest.fixture
+def conversation(client: TestClient, me: dict, other: dict) -> dict:
+    """The 1:1 room between ``me`` and ``other``."""
+    response = client.post(
+        "/api/conversations",
+        json={"peer_id": other["id"]},
+        headers=me["headers"],
+    )
+    assert response.status_code == 201, response.text
+    return response.json()

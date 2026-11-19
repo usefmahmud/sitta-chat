@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -116,3 +117,37 @@ class ConversationMember(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<ConversationMember {self.conversation_id}/{self.user_id}>"
+
+
+class Message(Base):
+    """One chat message.
+
+    ``seq`` is the per-conversation position (1, 2, 3, ...) and the only thing
+    clients sort or paginate by — wall-clock timestamps tie and can jump.
+    """
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "seq", name="uq_messages_conversation_seq"),
+        UniqueConstraint(
+            "sender_id", "client_msg_id", name="uq_messages_sender_client_id"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sender_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Client-supplied idempotency key; NULL for clients that do not send one.
+    client_msg_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging helper
+        return f"<Message {self.conversation_id}#{self.seq}>"
