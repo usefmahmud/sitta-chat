@@ -73,3 +73,23 @@ def init_db() -> None:
     from . import models  # noqa: F401  (import registers the mappers)
 
     Base.metadata.create_all(bind=engine)
+    _add_missing_sqlite_columns()
+
+
+def _add_missing_sqlite_columns() -> None:
+    """``create_all`` never alters an existing table.
+
+    Keeps a developer's older ``data/chat.db`` usable after a column is added,
+    without pulling in a migration tool mid-sprint.
+    """
+    if engine.url.get_backend_name() != "sqlite":
+        return
+
+    with engine.begin() as connection:
+        columns = {
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)")
+        }
+        if columns and "last_seen_at" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN last_seen_at DATETIME"
+            )

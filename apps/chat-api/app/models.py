@@ -45,6 +45,10 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+    # Written when the last socket closes; survives restarts.
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper
         return f"<User {self.email}>"

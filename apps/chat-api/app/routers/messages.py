@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import get_current_user
 from ..models import User
+from ..realtime.hub import hub
 from ..schemas import MessageCreate, MessageOut, MessagePage
 from ..services import conversations as conversation_service
 from ..services import messages as message_service
@@ -59,6 +60,22 @@ def send_message(
     response.status_code = (
         status.HTTP_201_CREATED if created else status.HTTP_200_OK
     )
+
+    if created:
+        # Emitted strictly after the commit: a rolled-back write never fires.
+        recipients = [
+            user_id
+            for user_id in conversation_service.member_ids(db, conversation_id)
+            if user_id != current_user.id
+        ]
+        hub.publish(
+            recipients,
+            {
+                "type": "message.created",
+                "message": MessageOut.model_validate(message).model_dump(mode="json"),
+            },
+        )
+
     return MessageOut.model_validate(message)
 
 
