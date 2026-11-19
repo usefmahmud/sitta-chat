@@ -1,10 +1,30 @@
 name: CI
 
+# Gates every pull request into dev (and the promotions to staging / main):
+#   1. commitlint   — conventional commits, PR range only
+#   2. branch-guard — <type>/CHAT-<N>-<slug>, and the right base branch
+#   3. secret-scan  — no .env / *.pem / *.key / *.db tracked, no key material in content
+#   4. api          — pytest for apps/chat-api (skipped until the app exists)
+#   5. web          — production build for apps/chat-web (skipped until the app exists)
+
 on:
   pull_request:
     branches: [dev, staging, main]
   push:
     branches: [dev, staging, main]
+
+# A new push on the same branch makes the previous run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  PYTHON_VERSION: '3.12'
+  ZERO_SHA: '0000000000000000000000000000000000000000'
 
 jobs:
   commitlint:
@@ -13,51 +33,182 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # full history: the PR range has to be walkable
           fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: npm ci || npm install
-      - name: Lint commits in this PR/push
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install commitlint
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Lint the commits introduced by this PR / push
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            npx commitlint --from "${{ github.event.pull_request.base.sha }}" \
-                            --to "${{ github.event.pull_request.head.sha }}" --verbose
-          else
-            npx commitlint --from "${{ github.event.before }}" --to "${{ github.sha }}" --verbose
+          set -uo pipefail
+          FROM="$BASE_SHA"
+          if [ -z "$FROM" ] || [ "$FROM" = "$ZERO_SHA" ] || ! git cat-file -e "${FROM}^{commit}" 2>/dev/null; then
+            echo "::notice::no usable base sha (new branch) — linting from the first commit"
+            FROM=$(git rev-list --max-parents=0 HEAD | tail -n 1)
           fi
+          echo "range: ${FROM:0:8}..${HEAD_SHA:0:8}"
+          npx --no-install commitlint --from "$FROM" --to "$HEAD_SHA" --verbose
 
-  api:
-    name: api (pytest)
-    runs-on: ubuntu-latest
-    if: hashFiles('apps/chat-api/requirements.txt') != ''
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install -r apps/chat-api/requirements.txt
-      - run: cd apps/chat-api && python -m pytest -q
-
-  web:
-    name: web (build)
-    runs-on: ubuntu-latest
-    if: hashFiles('apps/chat-web/package.json') != ''
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: cd apps/chat-web && npm ci && npm run build
-
-  branch-name:
+  branch-guard:
     name: branch name (ticket branch)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - name: Check branch follows <type>/<TICKET>-<slug>
+      - name: Branch must be <type>/CHAT-<N>-<slug> and target the right base
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          BR="${{ github.head_ref }}"
-          echo "branch: $BR"
-          echo "$BR" | grep -Eq '^(feat|fix|chore|docs|refactor|test|ci)/CHAT-[0-9]+-[a-z0-9-]+$' \
-            || { echo "::error::Branch must look like feat/CHAT-12-send-message"; exit 1; }
+          set -euo pipefail
+          echo "head: $HEAD_REF → base: $BASE_REF"
+
+          ticket_re='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)/CHAT-[0-9]+-[a-z0-9]+(-[a-z0-9]+)*$'
+
+          case "$BASE_REF" in
+            dev)
+              if ! printf '%s' "$HEAD_REF" | grep -Eq "$ticket_re"; then
+                echo "::error::PRs into dev must come from <type>/CHAT-<N>-<slug>, e.g. feat/CHAT-12-send-message"
+                exit 1
+              fi
+              ;;
+            staging)
+              [ "$HEAD_REF" = "dev" ] || {
+                echo "::error::only 'dev' can be promoted into staging (got '$HEAD_REF')"
+                exit 1
+              }
+              ;;
+            main)
+              [ "$HEAD_REF" = "staging" ] || {
+                echo "::error::only 'staging' can be promoted into main (got '$HEAD_REF')"
+                exit 1
+              }
+              ;;
+            *)
+              echo "::error::unexpected base branch '$BASE_REF'"
+              exit 1
+              ;;
+          esac
+
+          echo "✅ branch gate passed"
+
+  secret-scan:
+    name: secret scan (no env files, keys or databases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject secret-bearing files and key material
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # 1) file names — nothing secret-looking may be tracked (examples are fine)
+          bad_files=$(git ls-files \
+            | grep -Evi '\.env\.example$' \
+            | grep -Ei '(^|/)(\.env(\..*)?|[^/]+\.(pem|key|p12|pfx|db|db-wal|db-shm|sqlite3))$' \
+            || true)
+          if [ -n "$bad_files" ]; then
+            echo "::error::secret or data file is tracked — remove it and gitignore it"
+            echo "$bad_files"
+            fail=1
+          fi
+
+          # 2) file content — high-confidence credential shapes only
+          scan() {
+            label="$1"; pattern="$2"
+            if hits=$(git grep -nIE -e "$pattern" -- . \
+                        ':(exclude).env.example' \
+                        ':(exclude)package-lock.json' 2>/dev/null); then
+              echo "::error::$label"
+              echo "$hits"
+              fail=1
+            fi
+          }
+
+          scan "private key block committed" '-----BEGIN ([A-Z]+ )?PRIVATE KEY-----'
+          scan "GitHub token committed"     '(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})'
+          scan "AWS access key committed"   'AKIA[0-9A-Z]{16}'
+          scan "Slack token committed"      'xox[abprs]-[A-Za-z0-9-]{10,}'
+          scan "provider api key committed" 'sk-[A-Za-z0-9]{24,}'
+
+          if [ "$fail" -ne 0 ]; then
+            echo "rotate anything real before it reaches the remote."
+            exit 1
+          fi
+          echo "✅ no secrets or data files found"
+
+  api:
+    name: api (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect the api app
+        id: detect
+        run: |
+          if [ -f apps/chat-api/requirements.txt ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/chat-api/requirements.txt not on this branch yet — pytest skipped"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.found == 'true'
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: apps/chat-api/requirements.txt
+
+      - name: Install dependencies
+        if: steps.detect.outputs.found == 'true'
+        run: pip install -r apps/chat-api/requirements.txt
+
+      - name: Run pytest
+        if: steps.detect.outputs.found == 'true'
+        working-directory: apps/chat-api
+        run: python -m pytest -q
+
+  web:
+    name: web (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect the web app
+        id: detect
+        run: |
+          if [ -f apps/chat-web/package.json ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::apps/chat-web/package.json not on this branch yet — build skipped"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.found == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/chat-web/package-lock.json
+
+      - name: Install dependencies
+        if: steps.detect.outputs.found == 'true'
+        working-directory: apps/chat-web
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Build
+        if: steps.detect.outputs.found == 'true'
+        working-directory: apps/chat-web
+        run: npm run build
