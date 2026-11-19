@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, staging, main]
+  push:
+    branches: [dev, staging, main]
+
+jobs:
+  commitlint:
+    name: commitlint (conventional commits)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci || npm install
+      - name: Lint commits in this PR/push
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            npx commitlint --from "${{ github.event.pull_request.base.sha }}" \
+                            --to "${{ github.event.pull_request.head.sha }}" --verbose
+          else
+            npx commitlint --from "${{ github.event.before }}" --to "${{ github.sha }}" --verbose
+          fi
+
+  api:
+    name: api (pytest)
+    runs-on: ubuntu-latest
+    if: hashFiles('apps/chat-api/requirements.txt') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r apps/chat-api/requirements.txt
+      - run: cd apps/chat-api && python -m pytest -q
+
+  web:
+    name: web (build)
+    runs-on: ubuntu-latest
+    if: hashFiles('apps/chat-web/package.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd apps/chat-web && npm ci && npm run build
+
+  branch-name:
+    name: branch name (ticket branch)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Check branch follows <type>/<TICKET>-<slug>
+        run: |
+          BR="${{ github.head_ref }}"
+          echo "branch: $BR"
+          echo "$BR" | grep -Eq '^(feat|fix|chore|docs|refactor|test|ci)/CHAT-[0-9]+-[a-z0-9-]+$' \
+            || { echo "::error::Branch must look like feat/CHAT-12-send-message"; exit 1; }

@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# commitlint gate — rejects any non-conventional commit message
+npx --no -- commitlint --edit "$1"
