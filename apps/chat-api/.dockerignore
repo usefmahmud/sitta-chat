@@ -1,0 +1,25 @@
+# keep the build context small and free of local state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# local database and secrets never enter the image
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+tests/
