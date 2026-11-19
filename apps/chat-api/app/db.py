@@ -45,6 +45,9 @@ def build_engine(url: str | None = None) -> Engine:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA foreign_keys=ON")
+            # Writers wait for the lock instead of failing with
+            # "database is locked" under concurrent sends (risk R1).
+            cursor.execute("PRAGMA busy_timeout=5000")
             cursor.close()
 
     return engine
