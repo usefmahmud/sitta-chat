@@ -32,3 +32,15 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserOut
+
+class ConversationCreate(BaseModel):
+    """Start (or return) the 1:1 conversation with ``peer_id``."""
+
+    peer_id: str = Field(min_length=1, max_length=36)
+
+
+class ConversationOut(BaseModel):
+    id: str
+    type: str
+    created_at: datetime
+    participants: list[UserOut]
