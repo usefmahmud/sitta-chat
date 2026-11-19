@@ -10,11 +10,14 @@ from ..deps import get_current_user
 from ..models import Conversation, User
 from ..schemas import ConversationCreate, ConversationOut, UserSummary
 from ..services import conversations as service
+from ..services import messages as message_service
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
-def to_out(conversation: Conversation, viewer_id: str) -> ConversationOut:
+def to_out(
+    conversation: Conversation, viewer_id: str, last_message_preview: str | None = None
+) -> ConversationOut:
     """Serialize a room from one viewer's side: everything but the peer is
     already on the row, and a direct room has exactly one other member."""
     peer = next(
@@ -30,6 +33,7 @@ def to_out(conversation: Conversation, viewer_id: str) -> ConversationOut:
         type=conversation.type,
         created_at=conversation.created_at,
         last_message_at=conversation.last_message_at,
+        last_message_preview=last_message_preview,
         peer=UserSummary.model_validate(peer),
     )
 
@@ -68,8 +72,10 @@ def list_conversations(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ConversationOut]:
+    conversations = service.list_for_user(db, current_user.id)
+    previews = message_service.last_previews(db, [c.id for c in conversations])
     return [
-        to_out(c, current_user.id) for c in service.list_for_user(db, current_user.id)
+        to_out(c, current_user.id, previews.get(c.id)) for c in conversations
     ]
 
 
