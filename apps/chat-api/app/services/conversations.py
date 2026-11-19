@@ -44,6 +44,12 @@ def member_ids(db: Session, conversation_id: str) -> list[str]:
 
 
 def list_for_user(db: Session, user_id: str) -> list[Conversation]:
+    """My rooms, most recent activity first.
+
+    ``last_message_at`` is NULL for a room nobody has written in yet; those
+    sort last (``is_(None)`` is 0 for a timestamp, 1 for NULL in SQLite) and
+    fall back to newest-created among themselves.
+    """
     return list(
         db.scalars(
             select(Conversation)
@@ -52,7 +58,12 @@ def list_for_user(db: Session, user_id: str) -> list[Conversation]:
                 ConversationMember.conversation_id == Conversation.id,
             )
             .where(ConversationMember.user_id == user_id)
-            .order_by(Conversation.created_at.desc(), Conversation.id.desc())
+            .order_by(
+                Conversation.last_message_at.is_(None),
+                Conversation.last_message_at.desc(),
+                Conversation.created_at.desc(),
+                Conversation.id.desc(),
+            )
         ).all()
     )
 

@@ -33,6 +33,16 @@ class TokenResponse(BaseModel):
     expires_in: int
     user: UserOut
 
+
+class UserSummary(BaseModel):
+    """What a chat list shows about the other side — no email, no hash."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    display_name: str
+
+
 class ConversationCreate(BaseModel):
     """Start (or return) the 1:1 conversation with ``peer_id``."""
 
@@ -43,4 +53,7 @@ class ConversationOut(BaseModel):
     id: str
     type: str
     created_at: datetime
-    participants: list[UserOut]
+    last_message_at: datetime | None = None
+    # Filled from the messages table with CHAT-4; always null on this branch.
+    last_message_preview: str | None = None
+    peer: UserSummary
