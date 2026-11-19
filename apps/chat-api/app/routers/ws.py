@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -10,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..db import SessionLocal
 from ..models import User
+from ..realtime import presence
 from ..realtime.hub import hub
 from ..security import TokenError, decode_access_token
 from ..services import conversations as conversation_service
@@ -37,6 +39,16 @@ def _user_from_token(token: str | None) -> User | None:
 def _conversation_ids(user_id: str) -> list[str]:
     with SessionLocal() as db:
         return [c.id for c in conversation_service.list_for_user(db, user_id)]
+
+
+def _audience_ids(user_id: str) -> list[str]:
+    with SessionLocal() as db:
+        return presence.audience_ids(db, user_id)
+
+
+def _touch_last_seen(user_id: str):
+    with SessionLocal() as db:
+        return presence.touch_last_seen(db, user_id)
 
 
 async def _error(websocket: WebSocket, code: str, detail: str) -> None:
@@ -67,6 +79,12 @@ async def websocket_endpoint(
         }
     )
 
+    # Presence is announced on the first socket only; a second tab is not news.
+    if hub.count(user.id) == 1:
+        await presence.announce_online(
+            user.id, await run_in_threadpool(_audience_ids, user.id)
+        )
+
     try:
         while True:
             raw = await websocket.receive_text()
@@ -90,3 +108,15 @@ async def websocket_endpoint(
         pass
     finally:
         await hub.remove(user.id, websocket)
+        # Offline only when the last socket is gone. A disconnect cancels this
+        # task, so the bookkeeping is shielded: the last_seen write and the
+        # offline frame still land instead of dying at the first await.
+        if hub.count(user.id) == 0:
+            await asyncio.shield(_go_offline(user.id))
+
+
+async def _go_offline(user_id: str) -> None:
+    last_seen = await run_in_threadpool(_touch_last_seen, user_id)
+    await presence.announce_offline(
+        user_id, await run_in_threadpool(_audience_ids, user_id), last_seen
+    )
